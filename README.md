@@ -27,7 +27,7 @@ Gem для работы с платежным шлюзом ККБ ePay для и
     def epay
       # ...
       path_to_yaml = Rails.root.join('config', 'epay.yml')
-      epay_credentials = KazkomEpay::Epay.production_credentials path_to_yaml
+      epay_credentials = YAML.load_file(path_to_yaml)
       amount = ...
       
       # здесь вы фиксируете Order_ID, который вы передадите банку
@@ -94,7 +94,7 @@ Gem для работы с платежным шлюзом ККБ ePay для и
 
 ## Какой код я могу использовать для отсылки запроса на оплату в ePay?
 
-### Пример с использованием eRb:
+### Пример с использованием ERB:
 
 #### Пояснения
 
@@ -120,9 +120,29 @@ Gem для работы с платежным шлюзом ККБ ePay для и
   ---
   cert_id: abcd1234
   merchant_id: '1234567'
-  private_key_path: 'your.prv.pem' # делается предположение, что ключи находятся в app/cert
+  private_key_path: 'your.prv.pem'
   private_key_password: "s0me_p@$$w0rd"
 ```
+
+*Важное замечание*
+В _private_key_path_ нужно указать либо полный путь к файлу ключа, либо обернуть Yaml в Erb:
+
+epay.yml.erb
+```yaml
+  ---
+  # ...
+  private_key_path: <%= Rails.root.join('app', 'cert', 'your.prv.pem') %>
+```
+
+и в коде использовать
+
+    epay_credentials = YAML.load(ERB.new(File.read(path_to_yaml)))
+
+вместо
+
+    epay_credentials = YAML.load_file(path_to_yaml)
+
+
 
 ## Пример
 

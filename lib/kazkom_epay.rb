@@ -11,16 +11,6 @@ module KazkomEpay
 
   class Epay
     class << self
-      def production_credentials yaml_file
-        yaml = YAML.load_file(yaml_file)
-        epay_credentials = {
-          cert_id: yaml['cert_id'],
-          merchant_id: yaml['merchant_id'],
-          private_key_path: KazkomEpay::root.join(yaml['private_key_path']),
-          private_key_password: yaml['private_key_password'],
-        }
-      end
-
       def settings
         @@settings ||= {
           cert_id: "00C182B189", # test cert_id
