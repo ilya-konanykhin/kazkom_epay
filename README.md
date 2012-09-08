@@ -136,7 +136,7 @@ epay.yml.erb
 
 и в коде использовать
 
-    epay_credentials = YAML.load(ERB.new(File.read(path_to_yaml)))
+    epay_credentials = YAML.load(ERB.new(File.read(path_to_yaml)).result)
 
 вместо
 
