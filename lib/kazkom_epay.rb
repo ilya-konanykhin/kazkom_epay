@@ -80,6 +80,8 @@ module KazkomEpay
         check_result = public_key.verify digest, bank_sign_raw, check_this
       end
 
+      alias_method :xml_correctly_signed?, :check_signed_xml
+
       def cert_id
         settings[:cert_id]
       end
