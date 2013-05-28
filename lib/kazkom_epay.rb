@@ -80,7 +80,7 @@ module KazkomEpay
 
     bank_sign_raw_base64 = Hash.from_xml(xml)['document']['bank_sign']
 
-    bank_part_regexp = /\A<document>(.+)<bank_sign.*\z/
+    bank_part_regexp = /<document>(.+)<bank_sign.*\z/
 
     data_to_validate = bank_part_regexp.match(xml)[1]
     bank_sign_raw = Base64.decode64 bank_sign_raw_base64
