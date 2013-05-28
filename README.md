@@ -18,18 +18,30 @@ Gem для работы с платежным шлюзом ККБ ePay для и
 
 ## Использование (примеры с использованием Ruby On Rails)
 
+### Настройка
+
+Для использования гема его нужно предварительно настроить. Например, можно создать файл
+`config/initializers/epay.rb` с подобным содержимым:
+
+```ruby
+KazkomEpay.configure do |c|
+  c.cert_id '012345'
+  c.merchant_name 'Some Seller'
+  c.merchant_id '123456'
+  c.private_key_path Rails.root.join("config", "cert", "too_roga_i_kopyta_prv.pem")
+  c.private_key_password "$ecret"
+  c.public_key_path Rails.root.join("config", "cert", "kkbca.pem")
+end
+```
+
 ### Подпись XML-запроса к банку
 
 ```ruby
   # encoding: UTF-8
   class PayController < ApplicationController
     before_filter :authenticate_user!
+
     def epay
-      # ...
-      path_to_yaml = Rails.root.join('config', 'epay.yml')
-      epay_credentials = YAML.load_file(path_to_yaml)
-      amount = ...
-      
       # здесь вы фиксируете Order_ID, который вы передадите банку
       # и по которому вы сможете в дальнейшем найти нужный платеж
       # и пользователя, чтобы зачислить деньги ему на счет
@@ -39,11 +51,9 @@ Gem для работы с платежным шлюзом ККБ ePay для и
       end
 
       order_id = payment_request.id
+      amount = ...
 
-      epay_credentials.merge!({amount: amount, order_id: order_id})
-      epay = KazkomEpay::Epay.setup(epay_credentials)
-
-      @base64_encoded_xml = epay.base64_encoded_signed_xml
+      @base64_encoded_xml = KazkomEpay::Signer.new(amount: amount, order_id: order_id).base64_encoded_signed_xml
       # ...
     end
     # ...
@@ -59,7 +69,7 @@ Gem для работы с платежным шлюзом ККБ ePay для и
     def process_payment
       xml = params[:response]
 
-      epay_response_is_okay = KazkomEpay::Epay.check_signed_xml xml
+      epay_response_is_okay = KazkomEpay.valid_xml_signature? xml
       if epay_response_is_okay
         epay_response = Hash.from_xml(xml)['document']['bank']
 
@@ -114,36 +124,6 @@ Gem для работы с платежным шлюзом ККБ ePay для и
 </form>
 ```
 
-## Пример epay.yml
-
-```yaml
-  ---
-  cert_id: abcd1234
-  merchant_id: '1234567'
-  private_key_path: 'your.prv.pem'
-  private_key_password: "s0me_p@$$w0rd"
-```
-
-*Важное замечание*
-В _private_key_path_ нужно указать либо полный путь к файлу ключа, либо обернуть Yaml в Erb:
-
-epay.yml.erb
-```yaml
-  ---
-  # ...
-  private_key_path: <%= Rails.root.join('app', 'cert', 'your.prv.pem') %>
-```
-
-и в коде использовать
-
-    epay_credentials = YAML.load(ERB.new(File.read(path_to_yaml)).result)
-
-вместо
-
-    epay_credentials = YAML.load_file(path_to_yaml)
-
-
-
 ## Пример
 
 TODO: сделать Rails-приложение для примера
@@ -151,10 +131,10 @@ TODO: сделать Rails-приложение для примера
 Для тестирования postlink (обработчика ответа банка) приложение должно быть доступно из интернета (имеется ввиду URL).
 
 
-## Хотите нарушить инкапсуляцию и посмотреть на данные, с которыми работает gem?
+## Хотите посмотреть на данные, с которыми работает gem?
 
 ```ruby
-KazkomEpay::Epay.setup(epay_credentials).class_variable_get(:'@@settings').to_yaml
+KazkomEpay.configure(epay_credentials).settings.to_yaml
 ```
 
 ## Хотите помочь?

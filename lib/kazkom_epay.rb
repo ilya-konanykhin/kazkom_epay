@@ -1,114 +1,154 @@
 require "kazkom_epay/version"
+require "base64"
+require "openssl"
 
 module KazkomEpay
-  require 'base64'
-  require 'openssl'
-  require 'yaml'
+  CONFIGURABLE_ATTRIBUTES = [:cert_id, :merchant_id, :merchant_name,
+    :private_key_path, :private_key_password,
+    :public_key_path]
 
-  def self.root
+  def self.gem_root_path
     Pathname.new(File.expand_path '../..', __FILE__)
   end
 
-  class Epay
-    class << self
-      def settings
-        @@settings ||= {
-          cert_id: "00C182B189", # test cert_id
-          currency: 398, # KZT
-          merchant_name: "Some Merchant",
-          merchant_id: 92061101, # test merchant_id
+  DEFAULTS = {
+    # test data
+    cert_id: "00C182B189",
+    merchant_name: "Some Merchant",
+    merchant_id: 92061101,
 
-          private_key_path: KazkomEpay::root.join('cert', 'test', "test_prv.pem"), # test private key path
-          private_key_password: "nissan", # test private key password
-          public_key_path: KazkomEpay::root.join('cert', 'test', "kkbca.pem")
-        }
+    private_key_path: KazkomEpay.gem_root_path.join('cert', 'test', "test_prv.pem"),
+    private_key_password: "nissan",
+    public_key_path: KazkomEpay.gem_root_path.join('cert', 'test', "kkbca.pem")
+  }
+
+  # Выдача готового подписанного XML-документа для банка
+  #
+  # Пример использования:
+  #
+  #   signer = KazkomEpay::Signer.new(amount: 10, order_id: 242473)
+  #
+  #   # уже Base64-кодированного
+  #   signer.base64_encoded_signed_xml
+  #
+  #   # сырого (сам XML)
+  #   signer.signed_xml
+  #
+  class Signer
+    def initialize(options = {})
+      @amount, @order_id = options.fetch(:amount), options.fetch(:order_id)
+    end
+
+    def base64_encoded_signed_xml
+      Base64.encode64(signed_xml).gsub("\n", '')
+    end
+
+    def signed_xml
+      ["<document>", xml, xml_signature, "</document>"].join
+    end
+
+    private
+
+      def xml
+        %Q|<merchant cert_id="#{KazkomEpay.cert_id}" name="#{KazkomEpay.merchant_name}"><order order_id="#{@order_id}" amount="#{@amount}" currency="#{KazkomEpay.currency}"><department merchant_id="#{KazkomEpay.merchant_id}" amount="#{@amount}"/></order></merchant>|
       end
 
-      def setup with_params
-        @@settings ||= settings
-        with_params.each_pair do |key, value|
-          @@settings[key.to_sym] = value
+      def xml_signature
+        pkey = OpenSSL::PKey::RSA.new(File.read(KazkomEpay.send(:settings)[:private_key_path]), KazkomEpay.send(:settings)[:private_key_password])
+
+        signature = pkey.sign(OpenSSL::Digest::SHA1.new, xml)
+        signature.reverse! if KazkomEpay.send(:reverse_signature)
+
+        signature_base64_encoded_without_newlines = Base64.encode64(signature).gsub("\n", '')
+
+        ['<merchant_sign type="RSA">', signature_base64_encoded_without_newlines, '</merchant_sign>'].join
+      end
+  end
+
+
+  # Проверка аутентичности XML-документа, пришедшего от банка
+  #
+  # Пример использования:
+  #
+  #   unless KazkomEpay.valid_xml_signature? some_xml_string
+  #     raise "Hack attempt!"
+  #   end
+  #
+  def valid_xml_signature?(xml)
+    # for `Hash.from_xml`
+    require 'active_support/core_ext/hash/conversions'
+
+    bank_sign_raw_base64 = Hash.from_xml(xml)['document']['bank_sign']
+
+    bank_part_regexp = /\A<document>(.+)<bank_sign.*\z/
+
+    data_to_validate = bank_part_regexp.match(xml)[1]
+    bank_sign_raw = Base64.decode64 bank_sign_raw_base64
+    bank_sign_raw.reverse! if reverse_signature
+
+    digest = OpenSSL::Digest::SHA1.new
+    cert = OpenSSL::X509::Certificate.new File.read(settings[:public_key_path])
+
+    cert.public_key.verify digest, bank_sign_raw, data_to_validate
+  end
+
+  private
+
+    def settings
+      {
+        cert_id: cert_id,
+        currency: currency, # KZT
+        merchant_name: merchant_name,
+        merchant_id: merchant_id,
+
+        private_key_path: private_key[:path],
+        private_key_password: private_key[:password],
+        public_key_path: public_key[:path]
+      }
+    end
+
+    def reverse_signature
+      true
+    end
+
+    # Memoizers
+    def private_key
+      @private_key ||= {path: private_key_path, password: private_key_password}
+    end
+    def public_key
+      @public_key ||= {path: public_key_path}
+    end
+
+    module Configurator
+      require 'active_support/core_ext/module/attribute_accessors'
+
+      def configure_for_test
+        configure(DEFAULTS)
+      end
+      
+      def configure(attrs = {})
+        attrs.each do |k, v|
+          self.send(:"#{k}=", v) if CONFIGURABLE_ATTRIBUTES.include?(k.to_sym)
         end
+        yield self if block_given?
+
+        if (blank = CONFIGURABLE_ATTRIBUTES.map { |att| [att, self.send(att)] }.select{|_, val| val.nil?}).count > 0
+          blank_attribute_names = blank.map { |attr, _| attr }.join(", ")
+          raise "Some required attributes left blank: #{blank_attribute_names}"
+        end
+
         self
       end
 
-      def key
-        settings[:key]
+      CONFIGURABLE_ATTRIBUTES.each do |att|
+        mattr_accessor att
       end
 
-      def xml
-        %Q|<merchant cert_id="#{cert_id}" name="#{merchant_name}"><order order_id="#{order_id}" amount="#{amount}" currency="#{currency}"><department merchant_id="#{merchant_id}" amount="#{amount}"/></order></merchant>|
-      end
-
-      def xml_sign
-        pkey = OpenSSL::PKey::RSA.new(File.read(settings[:private_key_path]), settings[:private_key_password])
-
-        signature = pkey.sign(OpenSSL::Digest::SHA1.new, xml)
-        signature.reverse! if reverse_signature
-
-        signature_base64_encoded_without_newlines = Base64.encode64(signature).gsub("\n", '')
-        '<merchant_sign type="RSA">' + signature_base64_encoded_without_newlines + '</merchant_sign>'
-      end
-
-      def signed_xml
-        "<document>" + xml + xml_sign + "</document>"
-      end
-
-      # КЛЮЧЕВОЙ МОМЕНТ при формировании запроса для банка
-      def base64_encoded_signed_xml
-        Base64.encode64(signed_xml).gsub("\n", '')
-      end
-
-      # КЛЮЧЕВОЙ МОМЕНТ при проверке ответа от банка
-      def check_signed_xml xml
-        # Hash.from_xml
-        require 'active_support/core_ext/hash/conversions'
-
-        bank_sign_raw_base64 = Hash.from_xml(xml)['document']['bank_sign']
-
-        bank_part_regexp = /\A<document>(.+)<bank_sign.*\z/
-        bank_sign_regexp = /(<bank_sign .+<\/bank_sign>)/
-
-        check_this = bank_part_regexp.match(xml)[1]
-        bank_sign_raw = Base64.decode64 bank_sign_raw_base64
-        bank_sign_raw.reverse! if reverse_signature
-
-        digest = OpenSSL::Digest::SHA1.new
-        cert = OpenSSL::X509::Certificate.new File.read(settings[:public_key_path])
-        public_key = cert.public_key
-
-        check_result = public_key.verify digest, bank_sign_raw, check_this
-      end
-
-      alias_method :xml_correctly_signed?, :check_signed_xml
-
-      def cert_id
-        settings[:cert_id]
-      end
-
-      def merchant_name
-        settings[:merchant_name]
-      end
-
-      def order_id
-        settings[:order_id]
-      end
-
-      def amount
-        settings[:amount]
-      end
-
-      def currency
-        settings[:currency]
-      end
-
-      def merchant_id
-        settings[:merchant_id]
-      end
-
-      def reverse_signature
-        true
-      end
+      mattr_accessor :currency
+      @@currency = 398
     end
-  end
+
+
+    extend Configurator
+    extend self
 end
